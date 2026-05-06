@@ -191,7 +191,8 @@ if ($UnsafeDumpFrames) {
 function Anon([string]$path) {
   if (-not $path) { return $path }
   $local = $env:LOCALAPPDATA
-  $home = $env:USERPROFILE
+  # Don't name this $home — that's a PowerShell automatic read-only variable.
+  $userProfile = $env:USERPROFILE
   $appdata = $env:APPDATA
   if ($local -and $path.StartsWith($local, [System.StringComparison]::OrdinalIgnoreCase)) {
     return '%LOCALAPPDATA%' + $path.Substring($local.Length)
@@ -199,8 +200,8 @@ function Anon([string]$path) {
   if ($appdata -and $path.StartsWith($appdata, [System.StringComparison]::OrdinalIgnoreCase)) {
     return '%APPDATA%' + $path.Substring($appdata.Length)
   }
-  if ($home -and $path.StartsWith($home, [System.StringComparison]::OrdinalIgnoreCase)) {
-    return '~' + $path.Substring($home.Length)
+  if ($userProfile -and $path.StartsWith($userProfile, [System.StringComparison]::OrdinalIgnoreCase)) {
+    return '~' + $path.Substring($userProfile.Length)
   }
   return $path
 }
