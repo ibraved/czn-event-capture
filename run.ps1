@@ -1019,6 +1019,13 @@ if (-not $DumpFrames) {
   Write-Host "  Diagnostic files kept at $(Anon $RunDir)" -ForegroundColor Gray
 }
 
+# Surface the captured payload dump for inspection. Written by the addon on
+# every submit attempt and not removed by RunDir cleanup.
+$lastPayload = Join-Path $InstallDir 'last_capture.json'
+if (Test-Path -LiteralPath $lastPayload) {
+  Write-Host "  Last captured payload saved to: $(Anon $lastPayload)" -ForegroundColor Gray
+}
+
 Write-Host "============================================================" -ForegroundColor Green
 Write-Host ""
 Read-Host "Press Enter to close"

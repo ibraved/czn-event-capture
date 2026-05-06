@@ -514,6 +514,10 @@ class Submitter:
 
     def _send(self, payload: dict[str, Any]) -> SubmitResult:
         body = json.dumps(payload).encode("utf-8")
+        # Debug aid: persist the latest attempted payload outside the per-session
+        # run dir so the user can inspect what was captured even when submits
+        # fail. Overwritten on every attempt; survives run.ps1's cleanup.
+        self._write_last_payload_dump(body)
         req = urllib.request.Request(
             self._config.submit_url,
             data=body,
@@ -541,6 +545,25 @@ class Submitter:
         except Exception as e:
             logger.exception("submit failed (unexpected)")
             return SubmitResult("error", f"Unexpected: {e}")
+
+    def _write_last_payload_dump(self, body: bytes) -> None:
+        try:
+            # output_dir is the per-session run dir
+            # (%LOCALAPPDATA%\CZNEventCapture\snapshots\<ts>); the install dir
+            # is its grandparent. Writing there means run.ps1's RunDir cleanup
+            # leaves this file alone.
+            install_dir = self._config.output_dir.parent.parent
+            if not install_dir.exists():
+                return
+            # Pretty-print so the file is human-readable; the wire body is
+            # already minified above, so we redo with indent here.
+            decoded = json.loads(body.decode("utf-8"))
+            (install_dir / "last_capture.json").write_text(
+                json.dumps(decoded, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except Exception as e:
+            logger.warning("Could not write last_capture.json: %s", e)
 
     def _classify_http_error(self, e: urllib.error.HTTPError) -> SubmitResult:
         status = e.code
