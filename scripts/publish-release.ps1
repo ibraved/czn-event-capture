@@ -45,15 +45,49 @@ $files = @(
   'zstd_dictionary.bin'
 )
 
-# Step 1: Compute SHA256 of distributable files.
+# Step 1: Compute SHA256 of distributable files AS GIT WILL SERVE THEM.
+# Get-FileHash on the working tree hashes CRLF on Windows; git normalizes to
+# LF on commit (when core.autocrlf=true with no .gitattributes), so GitHub raw
+# serves a different byte stream than what the working-tree hash describes.
+# Hash the index/HEAD blob bytes to match what end users will actually fetch.
+# Requires that all changes be committed first.
+& git diff --quiet HEAD --
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "Working tree has uncommitted changes. Commit them before running publish-release." -ForegroundColor Red
+  exit 1
+}
+
+function Get-GitBlobSha256 {
+  param([string]$Path)
+  # Read the committed blob bytes directly via `git cat-file blob`. We must
+  # bypass PowerShell's text pipeline (which would re-encode and corrupt
+  # binaries) by reading the process's raw stdout stream.
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = 'git'
+  $psi.Arguments = "cat-file blob HEAD:`"$Path`""
+  $psi.RedirectStandardOutput = $true
+  $psi.UseShellExecute = $false
+  $psi.CreateNoWindow = $true
+  $proc = [System.Diagnostics.Process]::Start($psi)
+  $ms = New-Object System.IO.MemoryStream
+  $proc.StandardOutput.BaseStream.CopyTo($ms)
+  $proc.WaitForExit()
+  if ($proc.ExitCode -ne 0) {
+    throw "git cat-file blob HEAD:$Path failed with exit $($proc.ExitCode)"
+  }
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    $hashBytes = $sha.ComputeHash($ms.ToArray())
+  } finally {
+    $sha.Dispose()
+    $ms.Dispose()
+  }
+  return [System.BitConverter]::ToString($hashBytes).Replace('-','').ToLowerInvariant()
+}
+
 $hashes = @{}
 foreach ($name in $files) {
-  $path = Join-Path $repoRoot $name
-  if (-not (Test-Path $path)) {
-    Write-Host "Missing: $name" -ForegroundColor Red
-    exit 1
-  }
-  $hashes[$name] = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant()
+  $hashes[$name] = Get-GitBlobSha256 -Path $name
 }
 
 # Step 2: Read bootstrap.ps1 and rewrite the $ExpectedSha256 table.
@@ -85,37 +119,62 @@ if ($bootstrap -eq $bootstrapNew) {
   Write-Host "Committed updated bootstrap.ps1." -ForegroundColor Cyan
 }
 
-# Step 3: Capture HEAD SHA.
-$headSha = (& git rev-parse HEAD).Trim()
-$shortSha = $headSha.Substring(0, 7)
-Write-Host "HEAD is $headSha" -ForegroundColor Cyan
+# Step 3: Capture the manifest commit SHA. The bootstrap will be rewritten to
+# self-pin its $DefaultReleaseRef to THIS SHA, so downstream files are fetched
+# from a commit where the manifest definitionally matches them.
+$manifestSha = (& git rev-parse HEAD).Trim()
+$manifestShort = $manifestSha.Substring(0, 7)
+Write-Host "Manifest commit: $manifestSha" -ForegroundColor Cyan
 
-# Step 4: Update README install line + pinned-commit text.
+# Step 4: Rewrite $DefaultReleaseRef in bootstrap.ps1 to the manifest commit.
+# Without this, the bootstrap defaults to fetching files from `main`, which
+# drifts and breaks integrity for users on older release URLs.
+$bootstrap = [System.IO.File]::ReadAllText($bootstrapPath, $utf8NoBom)
+$refPattern = "(?m)^\`$DefaultReleaseRef\s*=\s*'[^']*'"
+if ($bootstrap -notmatch $refPattern) {
+  Write-Host "Could not find `$DefaultReleaseRef in bootstrap.ps1" -ForegroundColor Red
+  exit 1
+}
+$bootstrapNew = [regex]::Replace($bootstrap, $refPattern, "`$DefaultReleaseRef = '$manifestSha'")
+if ($bootstrap -eq $bootstrapNew) {
+  Write-Host "bootstrap.ps1 `$DefaultReleaseRef already points at $manifestShort." -ForegroundColor Green
+} else {
+  [System.IO.File]::WriteAllText($bootstrapPath, $bootstrapNew, $utf8NoBom)
+  & git add bootstrap.ps1
+  & git commit -m "Release: self-pin bootstrap to $manifestShort"
+  Write-Host "Committed bootstrap self-pin." -ForegroundColor Cyan
+}
+
+# Step 5: Capture the bootstrap commit SHA. This is what the README install URL
+# (and cznmetadecks's CAPTURE_RELEASE_SHA) point at.
+$bootstrapCommitSha = (& git rev-parse HEAD).Trim()
+$bootstrapShort = $bootstrapCommitSha.Substring(0, 7)
+Write-Host "Bootstrap commit: $bootstrapCommitSha" -ForegroundColor Cyan
+
+# Step 6: Update README install line + pinned-commit text to point at the
+# bootstrap commit (which holds the self-pinned bootstrap).
 $readmePath = Join-Path $repoRoot 'README.md'
 $readme = [System.IO.File]::ReadAllText($readmePath, $utf8NoBom)
 
-# Replace any /<ref>/ in the bootstrap.ps1 install URL with the new SHA.
 $urlPattern = 'https://raw\.githubusercontent\.com/ibraved/czn-event-capture/[A-Za-z0-9._/-]+/bootstrap\.ps1'
-$replacement = "https://raw.githubusercontent.com/ibraved/czn-event-capture/$headSha/bootstrap.ps1"
+$replacement = "https://raw.githubusercontent.com/ibraved/czn-event-capture/$bootstrapCommitSha/bootstrap.ps1"
 $readmeNew = [regex]::Replace($readme, $urlPattern, $replacement)
 
-# Replace pinned-to-commit text with the new short SHA. Handle both filled
-# (`Pinned to commit \`<7-or-40-hex>\``) and placeholder (`<short-sha>`/`<full-sha>`) forms.
-$readmeNew = [regex]::Replace($readmeNew, 'Pinned to commit `[a-f0-9]{4,40}`', "Pinned to commit ``$shortSha``")
-$readmeNew = $readmeNew.Replace('Pinned to commit `<short-sha>`', "Pinned to commit ``$shortSha``")
-$readmeNew = $readmeNew.Replace('<full-sha>', $headSha)
-$readmeNew = $readmeNew.Replace('<short-sha>', $shortSha)
+$readmeNew = [regex]::Replace($readmeNew, 'Pinned to commit `[a-f0-9]{4,40}`', "Pinned to commit ``$bootstrapShort``")
+$readmeNew = $readmeNew.Replace('Pinned to commit `<short-sha>`', "Pinned to commit ``$bootstrapShort``")
+$readmeNew = $readmeNew.Replace('<full-sha>', $bootstrapCommitSha)
+$readmeNew = $readmeNew.Replace('<short-sha>', $bootstrapShort)
 
 if ($readme -eq $readmeNew) {
-  Write-Host "README.md already references $headSha." -ForegroundColor Green
+  Write-Host "README.md already references $bootstrapCommitSha." -ForegroundColor Green
 } else {
   [System.IO.File]::WriteAllText($readmePath, $readmeNew, $utf8NoBom)
   & git add README.md
-  & git commit -m "Release: pin install URL to $shortSha"
+  & git commit -m "Release: pin install URL to $bootstrapShort"
   Write-Host "Committed updated README.md." -ForegroundColor Cyan
 }
 
-# Step 5: Optional tag.
+# Step 7: Optional tag (on the README commit).
 if ($Tag) {
   if (-not $TagName) {
     Write-Host "Provide -TagName when using -Tag (e.g. -TagName v2.2.0)." -ForegroundColor Red
@@ -125,13 +184,14 @@ if ($Tag) {
   Write-Host "Tagged $TagName." -ForegroundColor Cyan
 }
 
-# Step 6: Final report.
+# Step 8: Final report.
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor Yellow
-Write-Host "Pinned to $headSha" -ForegroundColor Yellow
+Write-Host "Bootstrap install commit: $bootstrapCommitSha" -ForegroundColor Yellow
+Write-Host "(downstream files fetched from manifest commit $manifestSha)"  -ForegroundColor DarkYellow
 Write-Host ""
 Write-Host "On cznmetadecks: open src/lib/events/capture-release.ts and update" -ForegroundColor Yellow
-Write-Host "  CAPTURE_RELEASE_SHA = `"$headSha`";" -ForegroundColor Yellow
+Write-Host "  CAPTURE_RELEASE_SHA = `"$bootstrapCommitSha`";" -ForegroundColor Yellow
 Write-Host ""
 Write-Host "Then commit and deploy. Push czn-event-capture when ready:" -ForegroundColor Yellow
 Write-Host "  git push origin <branch>" -ForegroundColor Yellow

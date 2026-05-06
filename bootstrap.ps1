@@ -27,10 +27,14 @@ try {
   $OutputEncoding = [System.Text.Encoding]::UTF8
 } catch {}
 
-$ReleaseRef = if ($env:CZN_RELEASE_REF) { $env:CZN_RELEASE_REF } else { 'main' }
+# Self-pinned at publish time. Defaults to 'main' in unreleased working trees;
+# publish-release.ps1 rewrites this to the publish commit's SHA so the bootstrap
+# is self-contained. Env var CZN_RELEASE_REF still wins if set, for testing.
+$DefaultReleaseRef = 'main'
+$ReleaseRef = if ($env:CZN_RELEASE_REF) { $env:CZN_RELEASE_REF } else { $DefaultReleaseRef }
 if ($ReleaseRef -notmatch '^[A-Za-z0-9._/-]+$') {
   Write-Host "Invalid CZN_RELEASE_REF value." -ForegroundColor Red
-  exit 1
+  throw "Invalid CZN_RELEASE_REF value: $ReleaseRef"
 }
 $RawBase = "https://raw.githubusercontent.com/ibraved/czn-event-capture/$ReleaseRef"
 $InstallDir = "$env:LOCALAPPDATA\CZNEventCapture"
@@ -88,9 +92,12 @@ foreach ($name in $files) {
     }
     Write-Host "  $name" -ForegroundColor Gray
   } catch {
+    # Use throw, not exit. When this script is run via `iex (iwr ...)`, `exit`
+    # closes the host PowerShell window before the user can read the error.
+    # `throw` propagates to the iex caller and leaves the session alive.
     Write-Host "Failed to download $name from $url" -ForegroundColor Red
     Write-Host $_.Exception.Message -ForegroundColor Red
-    exit 1
+    throw "czn-event-capture bootstrap failed on $name"
   }
 }
 
