@@ -29,8 +29,10 @@ from _czn_capture_lib import (
     DebugLogger,
     FrameDecoder,
     FrameRouter,
+    MAX_DECOMPRESSED_BYTES,
     StatusWriter,
     Submitter,
+    UpstreamCertPinner,
     logger,
 )
 
@@ -44,6 +46,7 @@ class EventCapture:
         self._submitter = Submitter(self._config, self._state)
         self._status = StatusWriter(self._config, self._state, self._submitter)
         self._debug = DebugLogger(self._config)
+        self._pinner = UpstreamCertPinner(self._config)
         self._submitter.set_after_submit(self._status.write)
 
         if not self._config.submit_token:
@@ -59,12 +62,21 @@ class EventCapture:
         self._status.write()
         logger.info("CZN event capture ready. Output dir: %s", self._config.output_dir)
 
+    def tls_established_server(self, data) -> None:
+        # Delegate to the pinner; flips its `safe` flag on mismatch.
+        self._pinner.tls_established_server(data)
+
     def websocket_message(self, flow) -> None:
+        if not self._pinner.safe:
+            return  # upstream cert pin mismatch; refuse to capture this session
         msg = flow.websocket.messages[-1]
         if msg.from_client:
             return
         text = msg.text if msg.is_text else self._decoder.decode(msg.content)
         if text is None:
+            return
+        if len(text) > MAX_DECOMPRESSED_BYTES:
+            logger.warning("Dropping oversize WS frame: %d chars", len(text))
             return
         try:
             parsed = json.loads(text)

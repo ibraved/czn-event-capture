@@ -18,33 +18,26 @@ Out of scope:
 - **Score forgery or build forgery**: submitting fabricated data is a moderation issue, not a security vulnerability.
 - **The compression dictionary** (`zstd_dictionary.bin`): derived from the game and redistributed under the upstream MIT terms.
 
-## Known limitations
-
-### Upstream TLS verification disabled in the reverse proxy
+## Upstream TLS handling
 
 The capture proxy is launched with `--ssl-insecure` because `run.ps1`
 hosts-redirects the game host to `127.0.0.1` and forwards from there to
-the game server's resolved IP. mitmproxy's TLS verification cannot match
-the cert hostname when the upstream is an IP, and there is no granular
-"verify chain but skip hostname" option in mitmproxy 12.
+the game server's resolved IP. mitmproxy can't verify a hostname against
+an IP-typed upstream, and mitmproxy 12 has no granular skip-hostname-only
+option.
 
-Threat: an attacker who can DNS-spoof or ARP-poison the local network at
-session start could MITM the upstream and feed crafted game frames into
-the addon, causing inflated or fabricated scores to land on the user's
-cznmetadecks account.
+Defense in depth: the addon (`_czn_capture_lib.UpstreamCertPinner`) hooks
+mitmproxy's `tls_established_server`, hashes the leaf cert SHA-256, and
+compares it against a per-region pin in `cert-pins.json`. First connection
+records the pin (TOFU); subsequent sessions verify. On mismatch the
+pinner refuses to submit any captured frames for the rest of the session.
+If the upstream cert legitimately rotates, delete `cert-pins.json` next
+to `status.json` and rerun.
 
-Out of scope for this issue:
-- The bearer token is **not** routed through this proxy. The Python
-  addon POSTs directly to `cznmetadecks.com` over a normal verified
-  HTTPS connection, so token theft via upstream MITM is not possible.
-- Inflated scores are caught by server-side moderator review.
-
-If you capture only on networks you control, this is irrelevant. On
-public Wi-Fi or any network you do not trust, treat captured submissions
-as untrusted until you re-capture from a trusted network.
-
-A future release may add cert-fingerprint pinning (TOFU) to close this
-gap. Tracked but not yet shipped.
+The bearer token is **not** routed through this proxy. The addon POSTs
+directly to `cznmetadecks.com` over a normal verified HTTPS connection
+(via `ssl.create_default_context()`), so token theft via upstream MITM
+is not possible.
 
 ## Antivirus false positives
 

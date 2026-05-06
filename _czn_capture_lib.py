@@ -8,7 +8,7 @@ Classes (each with one responsibility):
 """
 from __future__ import annotations
 
-import gzip
+import hashlib
 import json
 import logging
 import os
@@ -202,9 +202,14 @@ class FrameDecoder:
             chain.append(lambda b: self._zstd_dctx.decompress(b, max_output_size=cap))
         if HAS_ZSTD:
             chain.append(lambda b: zstd.ZstdDecompressor().decompress(b, max_output_size=cap))
-        chain.append(lambda b: _bounded_decompress(gzip.decompress, b))
-        for wbits in (15, -15, 31, 47):
-            chain.append(lambda b, w=wbits: _bounded_decompress(lambda x: zlib.decompress(x, w), b))
+        # zlib.decompressobj(...).decompress(data, max_length) caps OUTPUT
+        # bytes per call. wbits=47 auto-detects gzip vs zlib; -15 covers
+        # raw-deflate streams. Two attempts span the formats the previous
+        # one-shot chain handled (gzip + zlib + 4 wbits variants) with the
+        # crucial difference that a zip-bomb is rejected mid-inflation,
+        # not after the full buffer has already allocated.
+        for wbits in (47, -15):
+            chain.append(lambda b, w=wbits: _bounded_streaming_zlib(b, w))
         return chain
 
     def decode(self, raw: bytes) -> str | None:
@@ -221,15 +226,19 @@ class FrameDecoder:
         return None
 
 
-def _bounded_decompress(fn: Callable[[bytes], bytes], raw: bytes) -> bytes:
-    # gzip + zlib don't expose max_output_size. Verify the result post-hoc
-    # so a zip-bomb still allocates the inflated buffer once but doesn't
-    # propagate further up the pipeline. Acceptable trade-off for code
-    # paths used only on legacy/fallback frame encodings.
-    out = fn(raw)
-    if len(out) > MAX_DECOMPRESSED_BYTES:
-        raise ValueError(f"decompressed payload exceeds cap ({len(out)} > {MAX_DECOMPRESSED_BYTES})")
-    return out
+def _bounded_streaming_zlib(raw: bytes, wbits: int) -> bytes:
+    cap = MAX_DECOMPRESSED_BYTES
+    d = zlib.decompressobj(wbits=wbits)
+    out = d.decompress(raw, cap)
+    if d.unconsumed_tail:
+        # More compressed input remains but we already produced `cap` output
+        # bytes — refusing to continue. unconsumed_tail is a *bytes* slice,
+        # not a re-allocation; checking its truthiness is cheap.
+        raise ValueError(f"decompressed payload exceeds cap ({cap}+ bytes)")
+    tail = d.flush()
+    if len(out) + len(tail) > cap:
+        raise ValueError(f"decompressed payload exceeds cap ({len(out) + len(tail)} > {cap})")
+    return out + tail
 
 
 def _normalize_id(value: Any) -> str | None:
@@ -589,6 +598,89 @@ class StatusWriter:
             "last_submit_message": h.last_submit_message,
         }
         self._config.status_file.write_text(json.dumps(status, indent=2), encoding="utf-8")
+
+
+class UpstreamCertPinner:
+    """TOFU pin for the reverse-proxy upstream cert.
+
+    The proxy connects to upstream by IP after a hosts redirect, so
+    mitmproxy can't verify the cert hostname and runs with --ssl-insecure.
+    This pinner adds a second check: on tls_established_server it hashes
+    the leaf cert (SHA-256 of DER) and compares against a per-region pin
+    in cert-pins.json. First connection records the pin; subsequent
+    connections verify. A mismatch flips `safe=False`, and the
+    EventCapture facade then refuses to process any frame for the rest
+    of the session.
+    """
+
+    def __init__(self, config: "Config") -> None:
+        self._pin_file = config.output_dir / "cert-pins.json"
+        self._region = config.world_id_default or "default"
+        self._pins = self._load()
+        self.safe = True
+
+    def _load(self) -> dict[str, str]:
+        if not self._pin_file.exists():
+            return {}
+        try:
+            data = json.loads(self._pin_file.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            logger.warning("cert-pins.json is corrupt; treating as empty.")
+            return {}
+
+    def _save(self) -> None:
+        self._pin_file.write_text(json.dumps(self._pins, indent=2), encoding="utf-8")
+
+    def tls_established_server(self, data) -> None:
+        try:
+            chain = data.conn.certificate_list
+            if not chain:
+                raise RuntimeError("upstream presented no certificate")
+            cert = chain[0]
+            actual = hashlib.sha256(_cert_to_der(cert)).hexdigest()
+        except Exception as e:
+            logger.error("Could not extract upstream cert: %s. Refusing to submit captures.", e)
+            self.safe = False
+            return
+
+        expected = self._pins.get(self._region)
+        if expected is None:
+            self._pins[self._region] = actual
+            self._save()
+            logger.warning(
+                "Recorded upstream cert pin for region '%s': %s... "
+                "Future sessions verify against this. If the cert legitimately "
+                "rotates, delete %s and rerun.",
+                self._region, actual[:16], self._pin_file.name,
+            )
+            return
+        if expected == actual:
+            logger.info("Upstream cert pin OK for '%s' (%s...).", self._region, actual[:16])
+            return
+        logger.error(
+            "UPSTREAM CERT FINGERPRINT MISMATCH for region '%s'. Expected %s..., got %s.... "
+            "Refusing to submit any captures this session. If the cert legitimately rotated, "
+            "delete %s and rerun; otherwise your network may be MITM'd.",
+            self._region, expected[:16], actual[:16], self._pin_file.name,
+        )
+        self.safe = False
+
+
+def _cert_to_der(cert: Any) -> bytes:
+    # mitmproxy.certs.Cert.to_cryptography() returns the underlying
+    # cryptography.x509.Certificate, whose .public_bytes(DER) is a
+    # stable byte representation suitable for hashing across mitmproxy
+    # versions. Falls back to to_pem() if the API ever differs.
+    from cryptography.hazmat.primitives import serialization
+
+    to_crypto = getattr(cert, "to_cryptography", None)
+    if callable(to_crypto):
+        return to_crypto().public_bytes(encoding=serialization.Encoding.DER)
+    to_pem = getattr(cert, "to_pem", None)
+    if callable(to_pem):
+        return to_pem()
+    return bytes(cert)
 
 
 class DebugLogger:

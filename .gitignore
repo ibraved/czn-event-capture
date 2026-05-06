@@ -9,6 +9,7 @@ snapshots/
 status.json
 debug.jsonl
 cert.session-marker
+cert-pins.json
 token.json
 config.json
 hosts.lock
