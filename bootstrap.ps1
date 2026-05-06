@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
   Fetch the current czn-event-capture scripts into %LOCALAPPDATA%\CZNEventCapture
@@ -47,7 +47,7 @@ $files = @(
 # change. The bootstrap script itself is still trust-on-first-use when fetched
 # with an iex/iwr one-liner; using a tagged release URL is the stronger path.
 $ExpectedSha256 = @{
-  'run.ps1' = 'b439af20c3e39313c3d6bd3d4ddde87867c924c2aecd46c86edf16f6fe85a904'
+  'run.ps1' = '0ccb31639588a1db78a636d11b38c2afc8a0ea4d2a666f905631de88bb8a20d3'
   'locale.ps1' = '4ded2039ec91e4fc80c8f05f40ba372dbdb22d37e1680464e3d9dbd53eb33214'
   'czn_event_capture.py' = '587c9f120809ec391713e48a51a152fca3898a2b346734980a2ab22f80a053df'
   'requirements.txt' = 'f0fbf907c4b9555165802f71da696dcbfef3cf40ea20b5d1b03518c407ee5a11'
