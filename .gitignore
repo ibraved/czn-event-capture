@@ -4,8 +4,11 @@ __pycache__/
 *.pyc
 *.pyo
 
-# Runtime artifacts — never commit capture state or tokens
+# Runtime artifacts: never commit capture state or tokens
 snapshots/
+status.json
+debug.jsonl
+cert.session-marker
 token.json
 config.json
 hosts.lock

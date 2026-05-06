@@ -40,6 +40,7 @@ $files = @(
   'run.ps1',
   'locale.ps1',
   'czn_event_capture.py',
+  '_czn_capture_lib.py',
   'requirements.txt',
   'zstd_dictionary.bin'
 )
