@@ -52,7 +52,7 @@ $files = @(
 # change. The bootstrap script itself is still trust-on-first-use when fetched
 # with an iex/iwr one-liner; using a tagged release URL is the stronger path.
 $ExpectedSha256 = @{
-  'run.ps1' = '693f815120d0d9c75b37bd1c70532c5f1018f66bc4ac005e83a38d6f46fb194f'
+  'run.ps1' = '33bf98d5098971200efafdfbb252262e2b38177177da5c67dff7c05c7066f9bc'
   'locale.ps1' = '72ae8df69821cb05bd1495ff4d9ec4c554b1ae652622940c0893ed31d390e73b'
   'czn_event_capture.py' = '98a46cab09f5955e40d2fa2ec2252f89b3f2973fb0399d72db83f1247ce242ed'
   '_czn_capture_lib.py' = '322d9ff831e88a56efeebf8013b6ab04bcaaf5753caa96b4535709d9c77aecdf'
