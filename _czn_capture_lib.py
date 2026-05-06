@@ -15,6 +15,7 @@ import os
 import ssl
 import sys
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -730,3 +731,52 @@ class DebugLogger:
         if isinstance(value, list):
             return [self._redact(item, depth + 1) for item in value]
         return value
+
+
+class ShutdownWatcher:
+    """Watches for a shutdown.flag file and triggers mitmproxy clean shutdown.
+
+    run.ps1 cannot send Ctrl-Break to a hidden child process on Windows, and
+    Stop-Process -Force terminates without running addon `done()`, dropping any
+    in-flight or pending submissions. The watcher gives us a portable signal
+    channel: PowerShell creates the flag file, this thread sees it and asks
+    mitmproxy to shut down cleanly so `done()` (and `Submitter.flush()`) run.
+    """
+
+    POLL_INTERVAL_SECONDS = 0.5
+
+    def __init__(self, config: Config) -> None:
+        self._flag_file = config.output_dir / "shutdown.flag"
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        # Best-effort: clear any stale flag from a prior run before starting.
+        try:
+            if self._flag_file.exists():
+                self._flag_file.unlink()
+        except OSError:
+            pass
+
+    def start(self, master: Any) -> None:
+        if self._thread is not None:
+            return
+        self._thread = threading.Thread(
+            target=self._watch,
+            args=(master,),
+            daemon=True,
+            name="czn-shutdown-watcher",
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def _watch(self, master: Any) -> None:
+        while not self._stop.is_set():
+            if self._flag_file.exists():
+                logger.info("Shutdown flag detected; requesting clean shutdown.")
+                try:
+                    master.shutdown()
+                except Exception as e:
+                    logger.warning("master.shutdown failed: %s", e)
+                return
+            time.sleep(self.POLL_INTERVAL_SECONDS)

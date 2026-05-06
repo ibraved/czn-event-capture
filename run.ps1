@@ -530,7 +530,10 @@ function Read-HostsFile { try { return [System.IO.File]::ReadAllText($HOSTS_FILE
 function Write-TextFileAtomic {
   param(
     [Parameter(Mandatory)][string]$Path,
-    [Parameter(Mandatory)][string]$Text
+    # AllowEmptyString: a hosts file with our markers as the only content
+    # legitimately becomes empty after Restore-Hosts strips them, and we still
+    # need to write the empty result back to disk.
+    [Parameter(Mandatory)][AllowEmptyString()][string]$Text
   )
   $dir = Split-Path -Parent $Path
   $tmp = Join-Path $dir ('.czn-event-' + [System.Guid]::NewGuid().ToString('N') + '.tmp')
@@ -945,13 +948,18 @@ try {
   Write-Host ""
 
   Step "Stopping capture"
-  # Wait briefly so any in-flight submission completes before we kill the
-  # proxy. The addon debounces submits 3 seconds after each meaningful
-  # frame, so the latest state was POSTed at most ~3 seconds before the
-  # user pressed Enter; this grace period lets that final POST land.
+  # Signal the addon to shut down cleanly via a flag file (see ShutdownWatcher
+  # in _czn_capture_lib.py). A clean shutdown runs the addon's done() hook,
+  # which flushes any pending or debounced submission. Stop-Process -Force
+  # would skip done() entirely and lose in-flight POSTs.
   if ($script:proxy -and -not $script:proxy.HasExited) {
-    Start-Sleep -Seconds 4
+    $shutdownFlag = Join-Path $RunDir 'shutdown.flag'
+    try { New-Item -ItemType File -Path $shutdownFlag -Force -ErrorAction Stop | Out-Null } catch {}
+    # Watcher polls every 0.5s; addon done() then submits synchronously.
+    # 15s covers debounce (3s) + flush + HTTP round trip with margin.
+    try { $script:proxy.WaitForExit(15000) | Out-Null } catch {}
     if (-not $script:proxy.HasExited) {
+      Warn "Proxy did not exit cleanly within 15s; forcing termination. Last submission may not have been confirmed."
       try { Stop-Process -Id $script:proxy.Id -Force } catch {}
       try { $script:proxy.WaitForExit(3000) | Out-Null } catch {}
     }

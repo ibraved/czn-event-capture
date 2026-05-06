@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import json
 
+from mitmproxy import ctx
+
 from _czn_capture_lib import (
     CaptureState,
     Config,
@@ -30,6 +32,7 @@ from _czn_capture_lib import (
     FrameDecoder,
     FrameRouter,
     MAX_DECOMPRESSED_BYTES,
+    ShutdownWatcher,
     StatusWriter,
     Submitter,
     UpstreamCertPinner,
@@ -47,6 +50,7 @@ class EventCapture:
         self._status = StatusWriter(self._config, self._state, self._submitter)
         self._debug = DebugLogger(self._config)
         self._pinner = UpstreamCertPinner(self._config)
+        self._shutdown_watcher = ShutdownWatcher(self._config)
         self._submitter.set_after_submit(self._status.write)
 
         if not self._config.submit_token:
@@ -61,6 +65,11 @@ class EventCapture:
             )
         self._status.write()
         logger.info("CZN event capture ready. Output dir: %s", self._config.output_dir)
+
+    def running(self) -> None:
+        # Once the proxy is running we have a master to shut down; start the
+        # watcher so run.ps1 can request a graceful exit by writing a flag file.
+        self._shutdown_watcher.start(ctx.master)
 
     def tls_established_server(self, data) -> None:
         # Delegate to the pinner; flips its `safe` flag on mismatch.
@@ -100,6 +109,7 @@ class EventCapture:
         try:
             self._submitter.flush()
         finally:
+            self._shutdown_watcher.stop()
             self._status.write()
             self._debug.close()
             self._log_finished()
