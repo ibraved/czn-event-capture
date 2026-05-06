@@ -1,0 +1,24 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Runtime artifacts — never commit capture state or tokens
+snapshots/
+token.json
+config.json
+hosts.lock
+hosts.backup
+*.log
+*.err
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+Thumbs.db
+.DS_Store
