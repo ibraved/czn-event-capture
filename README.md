@@ -6,14 +6,14 @@ This script runs on your machine and is fully auditable. Read the source before 
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE) · [Source on GitHub](https://github.com/ibraved/czn-event-capture) · [Security policy](./SECURITY.md)
 
-> **Pinned to commit `c5f7ccf`.** The install command below points at this exact commit, not a branch. The `bootstrap.ps1` script itself pins SHA256 hashes of every downstream file. Verify by clicking the commit link above and reading the script before running it.
+> **Pinned to commit `8cd6e38`.** The install command below points at this exact commit, not a branch. The `bootstrap.ps1` script itself pins SHA256 hashes of every downstream file. Verify by clicking the commit link above and reading the script before running it.
 
 ## Quick start
 
 Open Windows PowerShell **as Administrator** and run:
 
 ```powershell
-irm 'https://raw.githubusercontent.com/ibraved/czn-event-capture/c5f7ccfc86346974eb3e7361b1c1d23a2f2cc6ff/bootstrap.ps1' | iex
+irm 'https://raw.githubusercontent.com/ibraved/czn-event-capture/8cd6e38a60dd7ac9115d5d8e54f3a594a97e2dd8/bootstrap.ps1' | iex
 ```
 
 **Why admin?** Two reasons: (1) hosts file edit so the proxy can intercept the game's HTTPS traffic, reverted on exit. (2) Local TLS cert install so the game trusts the proxy's certificate. That's it.
