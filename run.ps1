@@ -871,6 +871,7 @@ if ($UnsafeDumpFrames) { $env:CZN_EVENT_UNSAFE_DEBUG = '1' } else { $env:CZN_EVE
 
 $mitmArgs = @(
   '--mode', "reverse:https://$($realIp):$GAME_PORT/",
+  '--listen-host', '127.0.0.1',
   '--listen-port', $GAME_PORT,
   '--ssl-insecure',
   '--set', 'upstream_cert=false',

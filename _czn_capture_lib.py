@@ -49,6 +49,12 @@ OFFICIAL_SERVER_BASE = "https://cznmetadecks.com"
 # to one or two POSTs, well under the server's 10/hour per-token cap.
 SUBMIT_DEBOUNCE_SECONDS = 3.0
 
+# Real CZN game frames sit comfortably under 1 MB even for full login
+# payloads. 16 MB cap stops zip-bombs from a malicious upstream from
+# expanding to arbitrary memory while leaving headroom for unexpected
+# but legitimate growth.
+MAX_DECOMPRESSED_BYTES = 16 * 1024 * 1024
+
 SENSITIVE_DEBUG_KEYS = frozenset({
     "account_id",
     "authorization",
@@ -190,18 +196,22 @@ class FrameDecoder:
             return None
 
     def _build_chain(self) -> list[Callable[[bytes], bytes]]:
+        cap = MAX_DECOMPRESSED_BYTES
         chain: list[Callable[[bytes], bytes]] = [lambda b: b]  # already utf-8
         if self._zstd_dctx is not None:
-            chain.append(lambda b: self._zstd_dctx.decompress(b))
+            chain.append(lambda b: self._zstd_dctx.decompress(b, max_output_size=cap))
         if HAS_ZSTD:
-            chain.append(lambda b: zstd.ZstdDecompressor().decompress(b))
-        chain.append(gzip.decompress)
+            chain.append(lambda b: zstd.ZstdDecompressor().decompress(b, max_output_size=cap))
+        chain.append(lambda b: _bounded_decompress(gzip.decompress, b))
         for wbits in (15, -15, 31, 47):
-            chain.append(lambda b, w=wbits: zlib.decompress(b, w))
+            chain.append(lambda b, w=wbits: _bounded_decompress(lambda x: zlib.decompress(x, w), b))
         return chain
 
     def decode(self, raw: bytes) -> str | None:
         if not raw:
+            return None
+        if len(raw) > MAX_DECOMPRESSED_BYTES:
+            logger.warning("Dropping oversize raw frame: %d bytes", len(raw))
             return None
         for decoder in self._chain:
             try:
@@ -209,6 +219,32 @@ class FrameDecoder:
             except Exception:
                 continue
         return None
+
+
+def _bounded_decompress(fn: Callable[[bytes], bytes], raw: bytes) -> bytes:
+    # gzip + zlib don't expose max_output_size. Verify the result post-hoc
+    # so a zip-bomb still allocates the inflated buffer once but doesn't
+    # propagate further up the pipeline. Acceptable trade-off for code
+    # paths used only on legacy/fallback frame encodings.
+    out = fn(raw)
+    if len(out) > MAX_DECOMPRESSED_BYTES:
+        raise ValueError(f"decompressed payload exceeds cap ({len(out)} > {MAX_DECOMPRESSED_BYTES})")
+    return out
+
+
+def _normalize_id(value: Any) -> str | None:
+    # Accept str / int / float; reject dicts, lists, None. Always return
+    # a string so dict keys are uniformly comparable for sorted() in
+    # StatusWriter, regardless of whether the wire format gave us "123"
+    # or 123.
+    if isinstance(value, bool):
+        return None  # bool is a subclass of int in Python; reject explicitly
+    if isinstance(value, (str, int, float)):
+        s = str(value)
+        # Cap length so a multi-MB string id can't bloat the events/attempts
+        # dict's keys.
+        return s if len(s) <= 256 else None
+    return None
 
 
 @dataclass
@@ -242,7 +278,7 @@ class CaptureState:
 
     def __init__(self, world_id_default: str | None) -> None:
         self.events: dict[str, dict[str, Any]] = {}
-        self.attempts: dict[Any, dict[str, Any]] = {}
+        self.attempts: dict[str, dict[str, Any]] = {}
         self.user_state = UserState()
         self.user_id: str | None = None
         self.world_id: str | None = world_id_default
@@ -250,11 +286,19 @@ class CaptureState:
     def update_login_field(self, key: str, value: Any) -> None:
         setattr(self.user_state, key, value)
 
-    def set_event_summary(self, define_id: str, summary: dict[str, Any]) -> None:
-        self.events[define_id] = summary
+    def set_event_summary(self, define_id: Any, summary: dict[str, Any]) -> None:
+        normalized = _normalize_id(define_id)
+        if normalized is None:
+            logger.warning("Dropping event summary with non-scalar define_id: %r", define_id)
+            return
+        self.events[normalized] = summary
 
     def set_attempt(self, stage_id: Any, attempt: dict[str, Any]) -> None:
-        self.attempts[stage_id] = attempt
+        normalized = _normalize_id(stage_id)
+        if normalized is None:
+            logger.warning("Dropping battle return with non-scalar stage_id: %r", stage_id)
+            return
+        self.attempts[normalized] = attempt
 
     def set_identity(self, user_id: str | None, world_id: str | None) -> None:
         if user_id and not self.user_id:
