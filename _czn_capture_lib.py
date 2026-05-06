@@ -83,7 +83,7 @@ class Config:
     unsafe_debug: bool
     world_id_default: str | None
     submit_token: str | None
-    submit_url: str
+    server_base: str
     allow_custom_server_base: bool
 
     @classmethod
@@ -94,18 +94,32 @@ class Config:
 
         allow_custom = os.environ.get("CZN_EVENT_ALLOW_CUSTOM_SERVER_BASE") == "1"
         raw_base = (os.environ.get("CZN_EVENT_SERVER_BASE") or OFFICIAL_SERVER_BASE).rstrip("/")
-        validated_base = _validate_server_base(raw_base, allow_custom=allow_custom)
+        server_base = _validate_server_base(raw_base, allow_custom=allow_custom)
+
+        dict_path = _validate_dict_path(
+            configured=os.environ.get("CZN_EVENT_DICT_PATH"),
+            install_dir=here,
+            output_dir=output_dir,
+        )
 
         return cls(
             output_dir=output_dir,
-            dict_path=Path(os.environ.get("CZN_EVENT_DICT_PATH", str(here / "zstd_dictionary.bin"))),
+            dict_path=dict_path,
             debug=os.environ.get("CZN_EVENT_DEBUG") == "1",
             unsafe_debug=os.environ.get("CZN_EVENT_UNSAFE_DEBUG") == "1",
             world_id_default=os.environ.get("CZN_EVENT_WORLD_ID") or None,
             submit_token=os.environ.get("CZN_EVENT_TOKEN") or None,
-            submit_url=f"{validated_base}/api/events/submissions",
+            server_base=server_base,
             allow_custom_server_base=allow_custom,
         )
+
+    @property
+    def submit_url(self) -> str:
+        return f"{self.server_base}/api/events/submissions"
+
+    @property
+    def is_official_server_base(self) -> bool:
+        return self.server_base == OFFICIAL_SERVER_BASE
 
     @property
     def status_file(self) -> Path:
@@ -131,6 +145,26 @@ def _validate_server_base(value: str, *, allow_custom: bool) -> str:
             "Refusing custom CZN_EVENT_SERVER_BASE without CZN_EVENT_ALLOW_CUSTOM_SERVER_BASE=1."
         )
     return normalized
+
+
+def _validate_dict_path(*, configured: str | None, install_dir: Path, output_dir: Path) -> Path:
+    # Restrict dict_path to install_dir / output_dir so a malicious env var
+    # can't read arbitrary file contents into memory and (when combined
+    # with a custom server base) exfiltrate them.
+    default = install_dir / "zstd_dictionary.bin"
+    if not configured:
+        return default
+    candidate = Path(configured).resolve()
+    allowed_roots = [install_dir.resolve(), output_dir.resolve()]
+    for root in allowed_roots:
+        try:
+            candidate.relative_to(root)
+            return candidate
+        except ValueError:
+            continue
+    raise RuntimeError(
+        f"CZN_EVENT_DICT_PATH must be under {install_dir} or {output_dir}; got {candidate}"
+    )
 
 
 class FrameDecoder:
@@ -498,6 +532,8 @@ class StatusWriter:
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "user_id": self._state.user_id,
             "world_id": self._state.world_id,
+            "server_base": self._config.server_base,
+            "is_official_server_base": self._config.is_official_server_base,
             "events_captured": list(self._state.events.keys()),
             "attempts_captured": sorted(self._state.attempts.keys()),
             "has_savedata": len(self._state.user_state.savedata) > 0,

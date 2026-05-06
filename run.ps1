@@ -123,6 +123,14 @@ function Step($msg) { Write-Host ""; Write-Host "==> $msg" -ForegroundColor Cyan
 function Die($msg) { Write-Host "ERROR: $msg" -ForegroundColor Red; Read-Host "Press Enter to exit"; exit 1 }
 function Info($msg) { Write-Host "  $msg" -ForegroundColor Gray }
 function Warn($msg) { Write-Host "  [!] $msg" -ForegroundColor Yellow }
+function Banner([string[]]$lines, [System.ConsoleColor]$color = 'Red') {
+  $sep = '=' * 72
+  Write-Host ""
+  Write-Host $sep -ForegroundColor $color
+  foreach ($line in $lines) { Write-Host ("  " + $line) -ForegroundColor $color }
+  Write-Host $sep -ForegroundColor $color
+  Write-Host ""
+}
 
 function Normalize-ServerBase {
   param([Parameter(Mandatory)][string]$Value)
@@ -153,12 +161,28 @@ if ($UnsafeDumpFrames -and -not $DumpFrames) {
   Die "-UnsafeDumpFrames only applies when -DumpFrames is also set."
 }
 if ($AllowCustomServerBase -and $ServerBase -ne $OFFICIAL_SERVER_BASE) {
-  Warn "Developer mode: submissions and pairing checks will use $ServerBase instead of cznmetadecks.com."
-  Warn "Only continue if this is your own development server."
+  Banner @(
+    "DEVELOPER MODE: NON-OFFICIAL SERVER BASE",
+    "",
+    "Submissions + pairing checks will go to: $ServerBase",
+    "NOT to cznmetadecks.com.",
+    "",
+    "Your bearer token (auth for your account) will be sent to that server.",
+    "Only continue if this is YOUR development server. Stop now (Ctrl+C) if",
+    "this was unexpected; check whether something set CZN_EVENT_SERVER_BASE",
+    "in your environment without your knowledge."
+  )
 }
 if ($UnsafeDumpFrames) {
-  Warn "Unsafe debug mode: debug.jsonl will include full captured game/account payloads."
-  Warn "Do not send UnsafeDumpFrames logs to anyone or post them publicly."
+  Banner @(
+    "UNSAFE DEBUG MODE",
+    "",
+    "debug.jsonl will include UNREDACTED captured payloads:",
+    "  user_id, nickname, stove_id, email, clerk_user_id, device_fingerprint",
+    "",
+    "Do NOT post or send the dump file. Anyone with it can identify you and",
+    "your linked accounts."
+  )
 }
 
 # Replace user-identifying path prefixes with environment-variable tokens so
@@ -711,11 +735,13 @@ if ($needInstall) {
     $RequirementsSrc = $RequirementsDst
   }
   if ((Invoke-Silent $VenvPy @('-m', 'pip', 'install', '--upgrade', '--quiet', 'pip')) -ne 0) { Die "pip upgrade failed" }
-  if (Test-Path -LiteralPath $RequirementsSrc) {
-    if ((Invoke-Silent $VenvPy @('-m', 'pip', 'install', '--quiet', '--requirement', $RequirementsSrc)) -ne 0) { Die "pip install -r requirements.txt failed" }
-  } else {
-    if ((Invoke-Silent $VenvPy @('-m', 'pip', 'install', '--quiet', 'mitmproxy==11.0.2', 'zstandard==0.23.0')) -ne 0) { Die "pip install mitmproxy zstandard failed" }
+  if (-not (Test-Path -LiteralPath $RequirementsSrc)) {
+    Die "requirements.txt missing. Cannot proceed: hash-locked install requires it. Re-run the bootstrap one-liner."
   }
+  # --require-hashes refuses to install any wheel whose archive hash is not
+  # explicitly listed in requirements.txt. Protects against a compromised
+  # PyPI dependency or a typo-squat substituting in for a transitive dep.
+  if ((Invoke-Silent $VenvPy @('-m', 'pip', 'install', '--quiet', '--require-hashes', '--requirement', $RequirementsSrc)) -ne 0) { Die "pip install -r requirements.txt failed (hash mismatch or network)" }
 }
 
 # ------------------------------------------------------------ stage files

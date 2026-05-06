@@ -50,6 +50,12 @@ class EventCapture:
             logger.warning(
                 "CZN_EVENT_TOKEN not set; capture will run but nothing will be submitted."
             )
+        if not self._config.is_official_server_base:
+            logger.warning(
+                "Non-official server base in use: %s. Captures + token will go to this server, "
+                "NOT cznmetadecks.com. Stop now if this was not intended.",
+                self._config.server_base,
+            )
         self._status.write()
         logger.info("CZN event capture ready. Output dir: %s", self._config.output_dir)
 

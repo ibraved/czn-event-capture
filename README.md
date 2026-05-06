@@ -96,8 +96,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\run.ps1 [flags]
 | `-Region <global\|asia>` | Skip the region prompt. |
 | `-Locale <en\|ko\|ja\|zht>` | Force a prompt language; auto-detected from Windows culture. |
 | `-DumpFrames` | Keep a redacted `debug.jsonl` for diagnostics. |
-| `-UnsafeDumpFrames` | With `-DumpFrames`, write full unredacted frame payloads. Local debugging only. |
-| `-ServerBase <url>` | Override the cznmetadecks base URL. Requires `-AllowCustomServerBase`. |
+| `-UnsafeDumpFrames` | **Local debugging only.** With `-DumpFrames`, writes full unredacted payloads (user_id, nickname, email, device_fingerprint, etc.) to `debug.jsonl`. Never share the file. |
+| `-ServerBase <url>` | Override the cznmetadecks base URL. Requires `-AllowCustomServerBase`. **If anything other than `https://cznmetadecks.com` ends up in this flag without your intent, your bearer token is being sent to that server, not us.** |
 | `-AllowCustomServerBase` | Allow a non-official server base. Plain `http` only for localhost. |
 | `-RestoreOnly` | Skip capture; restore any leftover hosts edits and exit. |
 | `-UninstallCert` | Remove mitmproxy CA, restore hosts edits, exit. |
