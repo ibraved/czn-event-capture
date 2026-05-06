@@ -734,13 +734,21 @@ class DebugLogger:
 
 
 class ShutdownWatcher:
-    """Watches for a shutdown.flag file and triggers mitmproxy clean shutdown.
+    """Watches for a shutdown.flag file and triggers a clean shutdown.
 
     run.ps1 cannot send Ctrl-Break to a hidden child process on Windows, and
     Stop-Process -Force terminates without running addon `done()`, dropping any
     in-flight or pending submissions. The watcher gives us a portable signal
-    channel: PowerShell creates the flag file, this thread sees it and asks
-    mitmproxy to shut down cleanly so `done()` (and `Submitter.flush()`) run.
+    channel: PowerShell creates the flag file, this thread sees it and runs
+    a final submit synchronously BEFORE asking mitmproxy to shut down.
+
+    Why flush before shutdown instead of in `done()`: on mitmproxy 12 the
+    `done()` hook runs during asyncio loop teardown, and outbound urllib
+    POSTs from inside that window have been observed to fail with
+    WinError 10053 ('an established connection was aborted by the software
+    in your host machine') because the loop is closing process-level sockets.
+    Doing the POST from this watcher thread, while the loop is still fully
+    alive, keeps the submit on a stable network stack.
     """
 
     POLL_INTERVAL_SECONDS = 0.5
@@ -756,12 +764,12 @@ class ShutdownWatcher:
         except OSError:
             pass
 
-    def start(self, master: Any) -> None:
+    def start(self, master: Any, submitter: "Submitter") -> None:
         if self._thread is not None:
             return
         self._thread = threading.Thread(
             target=self._watch,
-            args=(master,),
+            args=(master, submitter),
             daemon=True,
             name="czn-shutdown-watcher",
         )
@@ -770,10 +778,14 @@ class ShutdownWatcher:
     def stop(self) -> None:
         self._stop.set()
 
-    def _watch(self, master: Any) -> None:
+    def _watch(self, master: Any, submitter: "Submitter") -> None:
         while not self._stop.is_set():
             if self._flag_file.exists():
-                logger.info("Shutdown flag detected; requesting clean shutdown.")
+                logger.info("Shutdown flag detected; flushing then shutting down.")
+                try:
+                    submitter.flush()
+                except Exception as e:
+                    logger.warning("pre-shutdown flush failed: %s", e)
                 try:
                     master.shutdown()
                 except Exception as e:

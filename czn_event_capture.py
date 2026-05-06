@@ -69,7 +69,9 @@ class EventCapture:
     def running(self) -> None:
         # Once the proxy is running we have a master to shut down; start the
         # watcher so run.ps1 can request a graceful exit by writing a flag file.
-        self._shutdown_watcher.start(ctx.master)
+        # Pass the submitter so the watcher can flush BEFORE shutdown, when
+        # the asyncio loop is still alive and outbound sockets are stable.
+        self._shutdown_watcher.start(ctx.master, self._submitter)
 
     def tls_established_server(self, data) -> None:
         # Delegate to the pinner; flips its `safe` flag on mismatch.
@@ -106,13 +108,14 @@ class EventCapture:
         self._status.write()
 
     def done(self) -> None:
-        try:
-            self._submitter.flush()
-        finally:
-            self._shutdown_watcher.stop()
-            self._status.write()
-            self._debug.close()
-            self._log_finished()
+        # Note: the actual submit-flush happens in ShutdownWatcher BEFORE
+        # mitmproxy's asyncio teardown begins. Doing it here causes
+        # WinError 10053 because outbound sockets get aborted during loop
+        # shutdown. We only run the local-state cleanup here.
+        self._shutdown_watcher.stop()
+        self._status.write()
+        self._debug.close()
+        self._log_finished()
 
     def _log_finished(self) -> None:
         s = self._state
