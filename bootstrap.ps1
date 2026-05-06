@@ -50,7 +50,8 @@ $files = @(
 $ExpectedSha256 = @{
   'run.ps1' = '0ccb31639588a1db78a636d11b38c2afc8a0ea4d2a666f905631de88bb8a20d3'
   'locale.ps1' = '4ded2039ec91e4fc80c8f05f40ba372dbdb22d37e1680464e3d9dbd53eb33214'
-  'czn_event_capture.py' = '587c9f120809ec391713e48a51a152fca3898a2b346734980a2ab22f80a053df'
+  'czn_event_capture.py' = '2b9d29e393f69a7e31ae4b9b8e6157178592e38ceedd5442a0456b35b822c69f'
+  '_czn_capture_lib.py' = '2dc8aca1ed0636e5d96d0f97020ff554319a04bc0a2925025ab8d2afbb174270'
   'requirements.txt' = 'f0fbf907c4b9555165802f71da696dcbfef3cf40ea20b5d1b03518c407ee5a11'
   'zstd_dictionary.bin' = '8dba3653f67d5b555533c54c17470455d291ef78a3d8b127cd332e0de40383d7'
 }
