@@ -157,6 +157,10 @@ $ServerBase = Normalize-ServerBase $ServerBase
 if ($ServerBase -ne $OFFICIAL_SERVER_BASE -and -not $AllowCustomServerBase) {
   Die "Refusing custom -ServerBase '$ServerBase' without -AllowCustomServerBase. This protects your pairing token from being sent to an unintended server."
 }
+# Always show the server target so the user can confirm where pairing,
+# token validation, and submissions will be sent.
+Write-Host ""
+Write-Host "  Server target: $ServerBase" -ForegroundColor Gray
 if ($UnsafeDumpFrames -and -not $DumpFrames) {
   Die "-UnsafeDumpFrames only applies when -DumpFrames is also set."
 }
@@ -487,6 +491,14 @@ function Test-TokenValid {
   } catch [System.Net.WebException] {
     $r = $_.Exception.Response
     if ($r -and [int]$r.StatusCode -eq 401) { return $false }
+    if ($r -and [int]$r.StatusCode -eq 404) {
+      # 404 means the server doesn't expose /api/events/device/whoami at all —
+      # the user is pointing at a server that doesn't run the events API
+      # (most commonly: production cznmetadecks.com, where the feature isn't
+      # deployed yet). Refuse to start: a silent "valid" here would lead to
+      # 404s on every submission with no obvious cause.
+      Die "Server $ServerBaseUrl does not expose /api/events/device/whoami (HTTP 404). The events API is not deployed there. Set CZN_SERVER_BASE + CZN_ALLOW_CUSTOM_SERVER_BASE=1 to point at a server that has the API (e.g. http://localhost:3000 for local dev), then rerun."
+    }
     # Network blip / server down: don't punish the user — treat as valid,
     # the later submit will surface the real failure.
     return $true
