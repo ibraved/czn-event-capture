@@ -30,7 +30,7 @@ try {
 # Self-pinned at publish time. Defaults to 'main' in unreleased working trees;
 # publish-release.ps1 rewrites this to the publish commit's SHA so the bootstrap
 # is self-contained. Env var CZN_RELEASE_REF still wins if set, for testing.
-$DefaultReleaseRef = '644802bb98dc579d24649274e39f6fc9c7c967c0'
+$DefaultReleaseRef = '29b7b01a1cbc3b47e6e0355474fe202bfd745173'
 $ReleaseRef = if ($env:CZN_RELEASE_REF) { $env:CZN_RELEASE_REF } else { $DefaultReleaseRef }
 if ($ReleaseRef -notmatch '^[A-Za-z0-9._/-]+$') {
   Write-Host "Invalid CZN_RELEASE_REF value." -ForegroundColor Red
